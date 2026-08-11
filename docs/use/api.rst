@@ -138,6 +138,74 @@ For guidelines on how to choose the optimal value for you, and other
 optimization tips, see :ref:`zapi-optimize`.
 
 
+SSL certificate verification
+============================
+
+If every request fails SSL certificate verification, you may need to
+:ref:`install the Zyte CA certificate <ca>`.
+
+Its :ref:`Python instructions <ca-python>` do not apply here. python-zyte-api
+uses :mod:`aiohttp`, which reads the ``SSL_CERT_FILE`` environment variable, and
+which needs a :ref:`CA bundle <ca-bundle>`, because ``SSL_CERT_FILE`` replaces
+the default certificate authorities instead of adding to them:
+
+.. code-block:: shell
+
+    export SSL_CERT_FILE=/path/to/bundle.pem
+
+Set it before running Python; :mod:`aiohttp` builds its default SSL context at
+import time.
+
+As a last resort, you can disable SSL certificate verification, at the cost of
+exposing your API key and your data to man-in-the-middle attacks. It requires a
+:meth:`~AsyncZyteAPI.session` with a custom connector:
+
+.. code-block:: python
+
+    import asyncio
+
+    from aiohttp import TCPConnector
+    from zyte_api import AsyncZyteAPI
+
+
+    async def main():
+        client = AsyncZyteAPI()
+        connector = TCPConnector(ssl=False, force_close=True)
+        async with client.session(connector=connector) as session:
+            result = await session.get(
+                {"url": "https://toscrape.com", "httpResponseBody": True}
+            )
+
+
+    asyncio.run(main())
+
+``force_close=True`` repeats a default that :meth:`~AsyncZyteAPI.session` only
+applies when it builds the connector itself.
+
+:class:`~aiohttp.TCPConnector` binds to the running event loop, so with the
+:ref:`sync API <sync>` you must build it in the same loop that the client uses:
+
+.. code-block:: python
+
+    import asyncio
+
+    from aiohttp import TCPConnector
+    from zyte_api import ZyteAPI
+
+
+    async def build_connector():
+        return TCPConnector(ssl=False, force_close=True)
+
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    connector = loop.run_until_complete(build_connector())
+
+    client = ZyteAPI()
+    with client.session(connector=connector) as session:
+        result = session.get({"url": "https://toscrape.com", "httpResponseBody": True})
+
+
 Errors and retries
 ==================
 
