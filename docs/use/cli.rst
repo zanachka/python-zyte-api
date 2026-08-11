@@ -43,6 +43,25 @@ The input file can be either of the following:
         {"url": "https://books.toscrape.com", "productNavigation": true}
 
 
+.. _cli-params:
+
+Shared request parameters
+=========================
+
+.. versionadded:: VERSION
+
+Use ``--params``/``-p`` to set :ref:`Zyte API request parameters
+<zapi-reference>` for every request:
+
+.. code-block:: shell
+
+    zyte-api urls.txt -p '{"httpResponseBody": true, "geolocation": "GB"}'
+
+For a plain-text :ref:`input file <input-file>`, these parameters replace the
+default :http:`request:browserHtml` parameter. For a `JSON Lines`_ input file,
+parameters set on a given line take precedence.
+
+
 .. _output-file:
 
 Output file

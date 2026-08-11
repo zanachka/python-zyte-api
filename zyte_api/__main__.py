@@ -112,7 +112,9 @@ async def run(
 
 
 def read_input(
-    input_fp: IO[str], intype: Literal["txt", "jl"] | object
+    input_fp: IO[str],
+    intype: Literal["txt", "jl"] | object,
+    params: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     assert intype in {"txt", "jl", _UNSET}
     lines = input_fp.readlines()
@@ -122,14 +124,29 @@ def read_input(
         intype = _guess_intype(input_fp.name, lines)
     if intype == "txt":
         urls = [u.strip() for u in lines if u.strip()]
-        records = [{"url": url, "browserHtml": True} for url in urls]
+        base = params if params else {"browserHtml": True}
+        records = [{"url": url, **base} for url in urls]
     else:
-        records = [json.loads(line.strip()) for line in lines if line.strip()]
+        records = [
+            {**(params or {}), **json.loads(line.strip())}
+            for line in lines
+            if line.strip()
+        ]
     # Automatically replicating the url in echoData to being able to
     # to match URLs with content in the responses
     for record in records:
         record.setdefault("echoData", record.get("url"))
     return records
+
+
+def _parse_params(value: str) -> dict[str, Any]:
+    try:
+        params = json.loads(value)
+    except json.JSONDecodeError as e:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {e}") from e
+    if not isinstance(params, dict):
+        raise argparse.ArgumentTypeError("expected a JSON object")
+    return params
 
 
 def _get_argument_parser(program_name: str = "zyte-api") -> argparse.ArgumentParser:
@@ -155,6 +172,19 @@ def _get_argument_parser(program_name: str = "zyte-api") -> argparse.ArgumentPar
             "If not specified, the input type is guessed based on the input "
             "file extension ('.jl', '.jsonl', or '.txt'), or in its content, "
             "with 'txt' as fallback."
+        ),
+    )
+    p.add_argument(
+        "--params",
+        "-p",
+        type=_parse_params,
+        help=(
+            "JSON object of Zyte API request parameters to use for every "
+            "request.\n"
+            "\n"
+            "For a plain-text input file, these parameters replace the "
+            "default browserHtml parameter. For a JSON Lines input file, "
+            "parameters set on a given line take precedence."
         ),
     )
     p.add_argument("--limit", type=int, help="Maximum number of requests to send.")
@@ -265,11 +295,11 @@ def _main(program_name: str = "zyte-api") -> None:
 
     if args.INPUT == "-":
         with nullcontext(sys.stdin) as input_fp:
-            queries = read_input(input_fp, args.intype)
+            queries = read_input(input_fp, args.intype, args.params)
     else:
         try:
             with Path(args.INPUT).open(encoding="utf8") as input_fp:
-                queries = read_input(input_fp, args.intype)
+                queries = read_input(input_fp, args.intype, args.params)
         except OSError as e:
             p.error(f"Cannot open input file {args.INPUT!r}: {e}")
     if not queries:

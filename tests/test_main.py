@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
+from io import StringIO
 from json import JSONDecodeError
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -11,7 +14,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from zyte_api import RequestError
-from zyte_api.__main__ import _get_argument_parser, run
+from zyte_api.__main__ import _get_argument_parser, read_input, run
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -194,28 +197,35 @@ async def test_run_stop_on_errors_true(mockserver):
 
 
 def _run(
-    *, input_: str, mockserver: MockServer, cli_params: Iterable[str] | None = None
+    *,
+    input_: str,
+    mockserver: MockServer,
+    cli_params: Iterable[str] | None = None,
+    stdin: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
     cli_params = cli_params or ()
     with NamedTemporaryFile("w") as url_list:
         url_list.write(input_)
         url_list.flush()
-        # Note: Using “python -m zyte_api” instead of “zyte-api” enables
-        # coverage tracking to work.
+        # Note: Using “python -m zyte_api” instead of “zyte-api”, and pointing
+        # PYTHONPATH at the source tree instead of letting the subprocess use
+        # the installed copy, enables coverage tracking to work.
         return subprocess.run(
             [
-                "python",
+                sys.executable,
                 "-m",
                 "zyte_api",
                 "--api-key",
                 "a",
                 "--api-url",
                 mockserver.urljoin("/"),
-                url_list.name,
+                "-" if stdin else url_list.name,
                 *cli_params,
             ],
+            input=input_.encode() if stdin else None,
             capture_output=True,
             check=False,
+            env={**os.environ, "PYTHONPATH": str(Path(__file__).parent.parent)},
         )
 
 
@@ -277,6 +287,86 @@ def test_intype_jsonl_explicit(mockserver):
         result.stdout
         == b'{"url": "https://a.example", "browserHtml": "<html><body>Hello<h1>World!</h1></body></html>"}\n'
     )
+
+
+def test_stdin(mockserver):
+    result = _run(
+        input_="https://a.example",
+        mockserver=mockserver,
+        cli_params=["-p", '{"httpResponseBody": true}'],
+        stdin=True,
+    )
+    assert not result.returncode
+    assert b'"httpResponseBody"' in result.stdout
+
+
+def test_params_txt(mockserver):
+    result = _run(
+        input_="https://a.example",
+        mockserver=mockserver,
+        cli_params=["-p", '{"httpResponseBody": true}'],
+    )
+    assert not result.returncode
+    assert b"browserHtml" not in result.stdout
+    assert b'"httpResponseBody"' in result.stdout
+
+
+def test_params_jsonl(mockserver):
+    result = _run(
+        input_='{"url": "https://a.example", "browserHtml": true}',
+        mockserver=mockserver,
+        cli_params=["-p", '{"browserHtml": false, "httpResponseBody": true}'],
+    )
+    assert not result.returncode
+    assert b'"browserHtml"' in result.stdout
+    assert b'"httpResponseBody"' in result.stdout
+
+
+@pytest.mark.parametrize("value", ("{", "[]"))
+def test_params_invalid(value, capsys):
+    parser = _get_argument_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--params", value, "README.rst"])
+    assert "--params/-p" in capsys.readouterr().err
+
+
+def test_read_input_txt():
+    assert read_input(StringIO("https://a.example\n\n"), "txt") == [
+        {
+            "url": "https://a.example",
+            "browserHtml": True,
+            "echoData": "https://a.example",
+        }
+    ]
+
+
+def test_read_input_txt_params():
+    parser = _get_argument_parser()
+    args = parser.parse_args(["-p", '{"httpResponseBody": true}', "README.rst"])
+    assert read_input(StringIO("https://a.example\n"), "txt", args.params) == [
+        {
+            "url": "https://a.example",
+            "httpResponseBody": True,
+            "echoData": "https://a.example",
+        }
+    ]
+
+
+def test_read_input_jl_params():
+    input_fp = StringIO('{"url": "https://a.example", "browserHtml": true}\n\n')
+    params = {"browserHtml": False, "httpResponseBody": True}
+    assert read_input(input_fp, "jl", params) == [
+        {
+            "url": "https://a.example",
+            "browserHtml": True,
+            "httpResponseBody": True,
+            "echoData": "https://a.example",
+        }
+    ]
+
+
+def test_read_input_empty():
+    assert read_input(StringIO(""), "txt") == []
 
 
 @pytest.mark.flaky(reruns=16)
